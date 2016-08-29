@@ -12,9 +12,8 @@ task centaur {
         git clone https://github.com/broadinstitute/centaur.git
         cd centaur
         git checkout jg_add_tests
-        echo "hi"
         git pull
-        ./test_cromwell.sh -j${cromwell_jar} -c/cromwell_root/${conf} -r/cromwell_root -t ${secret} -p100
+        ./test_cromwell.sh -j${cromwell_jar} -c/cromwell_root/${conf} -r/cromwell_root -t ${secret} 
     >>>
 
     output {
