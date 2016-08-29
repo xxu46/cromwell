@@ -13,7 +13,7 @@ task centaur {
         cd centaur
         git checkout jg_add_tests
         git pull
-        ./test_cromwell.sh -j${cromwell_jar} -c/cromwell_root/${conf} -r/cromwell_root -t ${secret} 
+        ./test_cromwell.sh -j${cromwell_jar} -c/cromwell_root/${conf} -r/cromwell_root -t ${secret}
     >>>
 
     output {
