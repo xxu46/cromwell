@@ -33,4 +33,6 @@ sbt assembly
 CROMWELL_JAR=$(find "$(pwd)/target/scala-2.11" -name "cromwell-*.jar")
 git clone https://github.com/broadinstitute/centaur.git
 cd centaur
+git checkout jg_add_tests
+git pull
 ./test_cromwell.sh -j"${CROMWELL_JAR}" -p5
