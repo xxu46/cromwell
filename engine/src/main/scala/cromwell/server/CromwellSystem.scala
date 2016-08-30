@@ -16,4 +16,5 @@ trait CromwellSystem {
   def shutdownActorSystem(): Unit = actorSystem.shutdown()
 
   CromwellBackends.initBackends(BackendConfiguration.AllBackendEntries, actorSystem)
+  logger.info(s"BACKENDS ARE: ${CromwellBackends.instance.get.backendEntries.map(_.name).mkString(", ")}")
 }
