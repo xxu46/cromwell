@@ -11,9 +11,7 @@ task centaur {
         export SBT_OPTS=-Dsbt.ivy.home=/cromwell_root/tmp/.ivy2
         git clone https://github.com/broadinstitute/centaur.git
         cd centaur
-        git checkout jg_add_tests
-        git pull
-        ./test_cromwell.sh -j${cromwell_jar} -c/cromwell_root/${conf} -r/cromwell_root -t ${secret} -p100
+        ./test_cromwell.sh -j${cromwell_jar} -c/cromwell_root/${conf} -r/cromwell_root -t ${secret}
     >>>
 
     output {
