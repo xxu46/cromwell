@@ -99,7 +99,7 @@ object Dependencies {
     "com.typesafe.scala-logging" %% "scala-logging" % "3.4.0",
     "org.broadinstitute" %% "wdl4s" % wdl4sV,
     "org.apache.commons" % "commons-lang3" % "3.4",
-    "io.spray" %% "spray-json" % sprayJsonV,
+    "com.typesafe.akka" %% "akka-http-spray-json-experimental" % akkaV,
     "com.typesafe" % "config" % "1.3.0",
     "com.typesafe.akka" %% "akka-actor" % akkaV,
     "com.typesafe.akka" %% "akka-slf4j" % akkaV,
@@ -129,7 +129,8 @@ object Dependencies {
     "org.typelevel" %% "cats" % catsV,
     "com.github.pathikrit" %% "better-files" % betterFilesV,
     "io.swagger" % "swagger-parser" % "1.0.22" % Test,
-    "org.yaml" % "snakeyaml" % "1.17" % Test
+    "org.yaml" % "snakeyaml" % "1.17" % Test,
+    "com.typesafe.akka" %% "akka-http-experimental" % akkaV
   ) ++ sprayServerDependencies
 
   val rootDependencies = slf4jBindingDependencies
