@@ -3,11 +3,8 @@ package cromwell.server
 
 import akka.actor.Props
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.{ContentTypes, HttpEntity}
-import akka.http.scaladsl.server.Directives._
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
-import com.typesafe.config.Config
 import cromwell.webservice.AkkaHttpService
 
 import scala.concurrent.duration._
@@ -43,8 +40,8 @@ class CromwellServerActor(cromwellSystem: CromwellSystem) extends CromwellRootAc
 //  }
 
   implicit val actorSystem = context.system
-  implicit val ec = context.dispatcher
-  implicit val materializer = ActorMaterializer()
+  override implicit val ec = context.dispatcher
+  override implicit val materializer = ActorMaterializer()
 
   val webserviceConf = cromwellSystem.conf.getConfig("webservice")
   val interface = webserviceConf.getString("interface")
