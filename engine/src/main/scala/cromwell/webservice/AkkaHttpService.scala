@@ -38,11 +38,6 @@ trait AkkaHttpService {
   val backendResponse = BackendResponse(BackendConfiguration.AllBackendEntries.map(_.name).sorted, BackendConfiguration.DefaultBackendEntry.name)
 
   val possibleRoutes =
-    path("hello") {
-      get {
-        complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Say hello to akka-http</h1>"))
-      }
-    } ~
       path("workflows" / Segment / "backends") { version =>
         get {
           complete(backendResponse)
