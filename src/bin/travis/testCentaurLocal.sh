@@ -34,4 +34,5 @@ CROMWELL_JAR=$(find "$(pwd)/target/scala-2.11" -name "cromwell-*.jar")
 LOCAL_CONF="$(pwd)/src/bin/travis/resources/local_centaur.conf"
 git clone https://github.com/broadinstitute/centaur.git
 cd centaur
+git checkout jg_akka_http
 ./test_cromwell.sh -j"${CROMWELL_JAR}" -c${LOCAL_CONF}
