@@ -54,6 +54,11 @@ echo "RUNNING TRAVIS CENTAUR"
 sbt assembly
 
 # Update the inputs file with stuff specific to this run
+HAS_CENTAUR_BRANCH=`git ls-remote --heads git@github.com:broadinstitute/centaur.git ${TRAVIS_BRANCH} | wc -l`
+CENTAUR_BRANCH="develop"
+if [ ${HAS_CENTAUR_BRANCH} = 1 ]; then
+CENTAUR_BRANCH=${TRAVIS_BRANCH}
+fi
 sed -i "s/CENTAUR_BRANCH/${CENTAUR_BRANCH}/g" src/bin/travis/resources/centaur.inputs
 CROMWELL_JAR=cromwell_${TRAVIS_BUILD_ID}.jar
 sed -i "s/CROMWELL_JAR/${CROMWELL_JAR}/g" src/bin/travis/resources/centaur.inputs
