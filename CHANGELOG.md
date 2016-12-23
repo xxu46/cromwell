@@ -6,12 +6,16 @@
 * Added ability to override the default zone(s) used by JES via the config structure by setting `genomics.default-zones` in the JES configuration
 * Added support for new WDL functions:
   * `length: (Array[X]) => Integer` - report the length of the specified array 
+## 25 
+
+* For MySQL users, a scalability improvement via batched DB writing of internal metadata events. **IMPORTANT** one must add `rewriteBatchedStatements=true` to their JDBC URL in their config in order to take advantage of this
 
 ## 24
 
 * When emitting workflow outputs to the Cromwell log only the first 1000 characters per output will be printed
 * Added support for conditional (`if`) statements.
 * Globs for Shared File System (SFS) backends, such as local or SGE, now use bash globbing instead of Java globbing, consistent with the JES backend.
+* For MySQL users, a massive scalability improvement via batched DB writing of internal metadata events. Note that one must add `rewriteBatchedStatements=true` to their JDBC URL in their config in order to take advantage of this
 
 ## 23
 

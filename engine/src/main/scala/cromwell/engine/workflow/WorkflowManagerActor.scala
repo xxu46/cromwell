@@ -10,7 +10,7 @@ import cromwell.core.{WorkflowAborted, WorkflowId}
 import cromwell.engine.backend.BackendSingletonCollection
 import cromwell.engine.workflow.WorkflowActor._
 import cromwell.engine.workflow.WorkflowManagerActor._
-import cromwell.engine.workflow.workflowstore.{WorkflowStoreActor, WorkflowStoreState}
+import cromwell.engine.workflow.workflowstore.{WorkflowStoreActor, WorkflowStoreEngineActor, WorkflowStoreState}
 import cromwell.jobstore.JobStoreActor.{JobStoreWriteFailure, JobStoreWriteSuccess, RegisterWorkflowCompleted}
 import cromwell.services.metadata.MetadataService._
 import cromwell.webservice.EngineStatsActor
@@ -164,11 +164,11 @@ class WorkflowManagerActor(params: WorkflowManagerActorParams)
       val maxNewWorkflows = maxWorkflowsToLaunch min (maxWorkflowsRunning - stateData.workflows.size)
       params.workflowStore ! WorkflowStoreActor.FetchRunnableWorkflows(maxNewWorkflows)
       stay()
-    case Event(WorkflowStoreActor.NoNewWorkflowsToStart, stateData) =>
+    case Event(WorkflowStoreEngineActor.NoNewWorkflowsToStart, stateData) =>
       log.debug("WorkflowStore provided no new workflows to start")
       scheduleNextNewWorkflowPoll()
       stay()
-    case Event(WorkflowStoreActor.NewWorkflowsToStart(newWorkflows), stateData) =>
+    case Event(WorkflowStoreEngineActor.NewWorkflowsToStart(newWorkflows), stateData) =>
       val newSubmissions = newWorkflows map submitWorkflow
       log.info("Retrieved {} workflows from the WorkflowStoreActor", newSubmissions.toList.size)
       scheduleNextNewWorkflowPoll()
@@ -187,7 +187,7 @@ class WorkflowManagerActor(params: WorkflowManagerActorParams)
         case None =>
           // All cool, if we got this far the workflow ID was found in the workflow store so this workflow must have never
           // made it to the workflow manager.
-          replyTo ! WorkflowStoreActor.WorkflowAborted(id)
+          replyTo ! WorkflowStoreEngineActor.WorkflowAborted(id)
           stay()
       }
     case Event(AbortAllWorkflowsCommand, data) if data.workflows.isEmpty =>
@@ -212,7 +212,7 @@ class WorkflowManagerActor(params: WorkflowManagerActorParams)
         params.jobStoreActor ! RegisterWorkflowCompleted(workflowId)
         if (toState.workflowState == WorkflowAborted) {
           val replyTo = abortingWorkflowToReplyTo(workflowId)
-          replyTo ! WorkflowStoreActor.WorkflowAborted(workflowId)
+          replyTo ! WorkflowStoreEngineActor.WorkflowAborted(workflowId)
           abortingWorkflowToReplyTo -= workflowId
         } else {
           params.workflowStore ! WorkflowStoreActor.RemoveWorkflow(workflowId)
