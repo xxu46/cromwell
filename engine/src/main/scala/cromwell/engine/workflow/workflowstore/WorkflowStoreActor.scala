@@ -73,7 +73,7 @@ case class WorkflowStoreActor(store: WorkflowStore, serviceRegistryActor: ActorR
       case cmd @ SubmitWorkflow(sourceFiles) =>
         storeWorkflowSources(NonEmptyList.of(sourceFiles)) map { ids =>
           val id = ids.head
-          registerSubmissionWithMetadataService(id, sourceFiles)
+          //registerSubmissionWithMetadataService(id, sourceFiles)
           sndr ! WorkflowSubmittedToStore(id)
           log.info("Workflow {} submitted.", id)
         }
