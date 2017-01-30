@@ -166,7 +166,7 @@ case class WorkflowOptions(jsObject: JsObject) {
   def asPrettyJson: String = jsObject.prettyPrint
 
   /**
-    * Returns a JSON representation of these workflow options where the encrypted values
+    * Returns a JSON representation ojef these workflow options where the encrypted values
     * have been replaced by the string "cleared". This will be called on the workflow
     * options (and subsequently stored back in the database) once a workflow finishes
     * and the encrypted values aren't needed anymore. This protects us in case the

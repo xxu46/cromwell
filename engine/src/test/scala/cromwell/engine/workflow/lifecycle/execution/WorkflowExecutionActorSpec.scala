@@ -42,6 +42,7 @@ class WorkflowExecutionActorSpec extends CromwellTestKitSpec with BeforeAndAfter
     """.stripMargin
 
   "WorkflowExecutionActor" should {
+    // FIXME: This needs to change here and also be partially implemented in backend
     "retry a job 2 times and succeed in the third attempt" in {
       import MetadataWatchActor.metadataKeyAttemptChecker
       val metadataSuccessPromise = Promise[Unit]()

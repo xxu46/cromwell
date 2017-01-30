@@ -4,10 +4,13 @@ import com.google.api.services.genomics.Genomics
 import com.google.api.services.genomics.model._
 import cromwell.backend.BackendJobDescriptor
 import cromwell.backend.standard.StandardAsyncJob
+import cromwell.backend.impl.jes.RunStatus._
 import cromwell.core.labels.Labels
 import org.slf4j.LoggerFactory
 
 import scala.collection.JavaConverters._
+import scala.language.postfixOps
+import scala.util.Try
 
 object Run {
   private val GenomicsScopes = List(

@@ -2,7 +2,6 @@ package cromwell.engine.workflow.lifecycle.execution
 
 import akka.actor._
 import cats.data.NonEmptyList
-import com.typesafe.config.ConfigFactory
 import cromwell.backend.BackendJobExecutionActor.{AbortedResponse, JobFailedNonRetryableResponse, JobFailedRetryableResponse, JobSucceededResponse}
 import cromwell.backend.BackendLifecycleActor.AbortJobCommand
 import cromwell.backend.{AllBackendInitializationData, BackendJobDescriptorKey, JobExecutionMap}
@@ -20,7 +19,6 @@ import cromwell.util.StopAndLogSupervisor
 import cromwell.webservice.EngineStatsActor
 import lenthall.exception.ThrowableAggregation
 import lenthall.util.TryUtil
-import net.ceedubs.ficus.Ficus._
 import wdl4s.values.{WdlArray, WdlBoolean, WdlOptionalValue, WdlValue, WdlString}
 import org.apache.commons.lang3.StringUtils
 import wdl4s.{Scope, _}
@@ -47,13 +45,7 @@ case class WorkflowExecutionActor(workflowDescriptor: EngineWorkflowDescriptor,
   override val workflowIdForCallMetadata = workflowDescriptor.id
 
   private val tag = s"WorkflowExecutionActor [UUID(${workflowDescriptor.id.shortString})]"
-  private val MaxRetries = ConfigFactory.load().as[Option[Int]]("system.max-retries") match {
-    case Some(value) => value
-    case None =>
-      workflowLogger.warn(s"Failed to load the max-retries value from the configuration. Defaulting back to a value of '$DefaultMaxRetriesFallbackValue'.")
-      DefaultMaxRetriesFallbackValue
-  }
-  
+
   private val backendFactories = TryUtil.sequenceMap(workflowDescriptor.backendAssignments.values.toSet[String] map { backendName =>
     backendName -> CromwellBackends.backendLifecycleFactoryActorByName(backendName)
   } toMap) recover {
@@ -299,19 +291,13 @@ case class WorkflowExecutionActor(workflowDescriptor: EngineWorkflowDescriptor,
   }
 
   private def handleRetryableFailure(jobKey: BackendJobDescriptorKey, reason: Throwable, returnCode: Option[Int]) = {
-    // We start with index 1 for #attempts, hence invariant breaks only if jobKey.attempt > MaxRetries
-    if (jobKey.attempt <= MaxRetries) {
-      val newJobKey = jobKey.copy(attempt = jobKey.attempt + 1)
-      workflowLogger.info(s"Retrying job execution for ${newJobKey.tag}")
-      /*  Currently, we update the status of the old key to Preempted, and add a new entry (with the #attempts incremented by 1)
-        * to the execution store with status as NotStarted. This allows startRunnableCalls to re-execute this job */
-      val executionDiff = WorkflowExecutionDiff(Map(jobKey -> ExecutionStatus.Preempted, newJobKey -> ExecutionStatus.NotStarted))
-      val newData = stateData.mergeExecutionDiff(executionDiff).removeCallExecutionActor(jobKey)
-      stay() using startRunnableScopes(newData)
-    } else {
-      workflowLogger.warn(s"Exhausted maximum number of retries for job ${jobKey.tag}. Failing.")
-      goto(WorkflowExecutionFailedState) using stateData.mergeExecutionDiff(WorkflowExecutionDiff(Map(jobKey -> ExecutionStatus.Failed))).removeCallExecutionActor(jobKey)
-    }
+    val newJobKey = jobKey.copy(attempt = jobKey.attempt + 1)
+    workflowLogger.info(s"Retrying job execution for ${newJobKey.tag}")
+    /*  Currently, we update the status of the old key to RetryableFailure, and add a new entry (with the #attempts incremented by 1)
+      * to the execution store with status as NotStarted. This allows startRunnableCalls to re-execute this job */
+    val executionDiff = WorkflowExecutionDiff(Map(jobKey -> ExecutionStatus.RetryableFailure, newJobKey -> ExecutionStatus.NotStarted))
+    val newData = stateData.mergeExecutionDiff(executionDiff).removeCallExecutionActor(jobKey)
+    stay() using startRunnableScopes(newData)
   }
 
   private def handleCallSuccessful(jobKey: JobKey, outputs: CallOutputs, data: WorkflowExecutionActorData, jobExecutionMap: JobExecutionMap) = {
@@ -364,6 +350,7 @@ case class WorkflowExecutionActor(workflowDescriptor: EngineWorkflowDescriptor,
     val runnableScopes = data.executionStore.runnableScopes
     val runnableCalls = runnableScopes.view collect { case k if k.scope.isInstanceOf[Call] => k } sortBy { k =>
       (k.scope.fullyQualifiedName, k.index.getOrElse(-1)) } map { _.tag }
+
     if (runnableCalls.nonEmpty) workflowLogger.info("Starting calls: " + runnableCalls.mkString(", "))
 
     // Each process returns a Try[WorkflowExecutionDiff], which, upon success, contains potential changes to be made to the execution store.
@@ -764,7 +751,7 @@ object WorkflowExecutionActor {
     override val exceptionContext = s"WorkflowExecutionActor"
   }
 
-  private lazy val DefaultMaxRetriesFallbackValue = 10
+  //private lazy val DefaultMaxRetriesFallbackValue = 10
 
   def props(workflowDescriptor: EngineWorkflowDescriptor,
             serviceRegistryActor: ActorRef,

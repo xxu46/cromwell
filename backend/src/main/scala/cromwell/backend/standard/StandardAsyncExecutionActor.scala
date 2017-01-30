@@ -1,7 +1,5 @@
 package cromwell.backend.standard
 
-import java.io.IOException
-
 import akka.actor.{Actor, ActorLogging, ActorRef}
 import akka.event.LoggingReceive
 import cromwell.backend.BackendJobExecutionActor.{AbortedResponse, BackendJobExecutionResponse}
@@ -12,7 +10,7 @@ import cromwell.backend.validation._
 import cromwell.backend.wdl.{Command, OutputEvaluator, WdlFileMapper}
 import cromwell.backend.{BackendConfigurationDescriptor, BackendInitializationData, BackendJobDescriptor, BackendJobLifecycleActor}
 import cromwell.core.path.Path
-import cromwell.core.{CallOutputs, CromwellAggregatedException, CromwellFatalExceptionMarker, ExecutionEvent}
+import cromwell.core.{CallOutputs, CromwellAggregatedException, ExecutionEvent}
 import cromwell.services.keyvalue.KeyValueServiceActor._
 import cromwell.services.metadata.CallMetadataKeys
 import lenthall.util.TryUtil
@@ -102,9 +100,7 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
 
   /** @see [[Command.instantiate]] */
   final lazy val commandLinePreProcessor: EvaluatedTaskInputs => Try[EvaluatedTaskInputs] = {
-    inputs => TryUtil.sequenceMap(inputs mapValues WdlFileMapper.mapWdlFiles(preProcessWdlFile)) recoverWith {
-      case e => Failure(new IOException(e.getMessage) with CromwellFatalExceptionMarker)
-    }
+    inputs => TryUtil.sequenceMap(inputs mapValues WdlFileMapper.mapWdlFiles(preProcessWdlFile))
   }
 
   /**
@@ -170,16 +166,15 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
     jobLogger.info(s"`$instantiatedCommand`")
 
     val cwd = commandDirectory
+    val tmpDir = cwd./("tmp")
     val rcPath = cwd./(jobPaths.returnCodeFilename)
     val rcTmpPath = rcPath.plusExt("tmp")
 
     val globFiles = backendEngineFunctions.findGlobOutputs(call, jobDescriptor)
 
     s"""|#!/bin/bash
-        |tmpDir=$$(mktemp -d $cwd/tmp.XXXXXX) 
-        |chmod 777 $$tmpDir
-        |export _JAVA_OPTIONS=-Djava.io.tmpdir=$$tmpDir
-        |export TMPDIR=$$tmpDir
+        |export _JAVA_OPTIONS=-Djava.io.tmpdir=$tmpDir
+        |export TMPDIR=$tmpDir
         |$commandScriptPreamble
         |(
         |cd $cwd
@@ -335,7 +330,7 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
   /**
     * Attempts to abort a job when an abort signal is retrieved.
     *
-    * If `requestsAbortAndDiesImmediately` is true, then the actor will die immediately after this method returns.
+    * If `abortAndDieImmediately` is true, then the actor will die immediately after this method returns.
     *
     * @param jobId The job to abort.
     */
@@ -345,14 +340,11 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
     * Returns true if when an abort signal is retrieved, the actor makes an attempt to abort and then immediately stops
     * itself _without_ polling for an aborted status.
     *
-    * NOTE: When this value is set to `false`, `tryAbort` must write the rc and stderr files, as they will still be
-    * processed during a poll that returns a terminal status.
-    *
-    * The default is true.
+    * The default is false.
     *
     * @return true if actor should request an abort and then die immediately.
     */
-  def requestsAbortAndDiesImmediately: Boolean = true
+  def requestsAbortAndDiesImmediately: Boolean = false
 
   /**
     * Return true if the return code is an abort code.
@@ -367,11 +359,10 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
   /**
     * Custom behavior to run after an abort signal is processed.
     *
-    * By default handles the behavior of `requestsAbortAndDiesImmediately`.
+    * By default handles the behavior of `abortAndDieImmediately`.
     */
   def postAbort(): Unit = {
     if (requestsAbortAndDiesImmediately) {
-      tellMetadata(Map(CallMetadataKeys.BackendStatus -> "Aborted"))
       context.parent ! AbortedResponse(jobDescriptor.key)
       context.stop(self)
     }
@@ -480,7 +471,7 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
 
   // See executeOrRecoverSuccess
   private var missedAbort = false
-  private case class CheckMissedAbort(jobId: StandardAsyncJob)
+  private case object CheckMissedAbort
 
   context.become(standardReceiveBehavior(None) orElse receive)
 
@@ -495,8 +486,7 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
         case None => missedAbort = true
       }
       postAbort()
-    case CheckMissedAbort(jobId: StandardAsyncJob) =>
-      context.become(standardReceiveBehavior(Option(jobId)) orElse receive)
+    case CheckMissedAbort =>
       if (missedAbort)
         self ! AbortJobCommand
     case KvPutSuccess(_) => // expected after the KvPut for the operation ID
@@ -535,7 +525,8 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
         queued up and may still be run by the thread pool anytime in the future. Issue #1218 may address this
         inconsistency at a later time. For now, just go back and check if we missed the abort command.
         */
-        self ! CheckMissedAbort(handle.pendingJob)
+        context.become(standardReceiveBehavior(Option(handle.pendingJob)) orElse receive)
+        self ! CheckMissedAbort
       case _ =>
     }
     executionHandle
@@ -576,7 +567,7 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
       the state names.
        */
       val prevStateName = previousStatus.map(_.toString).getOrElse("-")
-      jobLogger.info(s"Status change from $prevStateName to $status")
+      jobLogger.info(s"$tag Status change from $prevStateName to $status")
       tellMetadata(Map(CallMetadataKeys.BackendStatus -> status))
     }
 
@@ -604,11 +595,11 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
           customPollStatusFailure orElse {
             case (_: ExecutionHandle, exception: Exception) if isFatal(exception) =>
               // Log exceptions and return the original handle to try again.
-              jobLogger.warn(s"Fatal exception polling for status. Job will fail.")
+              jobLogger.warn(s"Caught fatal exception attempting to poll", exception)
               FailedNonRetryableExecutionHandle(exception)
             case (handle: ExecutionHandle, exception: Exception) =>
               // Log exceptions and return the original handle to try again.
-              jobLogger.warn(s"Caught non-fatal ${exception.getClass.getSimpleName} exception trying to poll, retrying", exception)
+              jobLogger.warn(s"Caught exception trying to poll, retrying", exception)
               handle
           }
         handler((oldHandle, exception))
@@ -708,4 +699,4 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
   *
   * @param jobId The job id.
   */
-final case class StandardAsyncJob(jobId: String) extends JobId
+case class StandardAsyncJob(jobId: String) extends JobId

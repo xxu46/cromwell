@@ -43,6 +43,7 @@ trait ValidatedRuntimeAttributesBuilder {
 
   /**
     * Returns a map of coercions suitable for RuntimeAttributesDefault.workflowOptionsDefault.
+    *
     */
   final lazy val coercionMap: Map[String, Traversable[WdlType]] = {
     validations.map(validation => validation.key -> validation.coercion).toMap

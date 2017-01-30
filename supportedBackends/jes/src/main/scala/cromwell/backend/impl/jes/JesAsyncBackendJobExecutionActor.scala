@@ -7,14 +7,20 @@ import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import com.google.api.services.genomics.model.RunPipelineRequest
 import cromwell.backend._
 import cromwell.backend.async.{AbortedExecutionHandle, ExecutionHandle, FailedNonRetryableExecutionHandle, FailedRetryableExecutionHandle, PendingExecutionHandle}
+import cromwell.backend.impl.jes.RunStatus.{TerminalRunStatus}
+import cromwell.backend.impl.jes.errors._
+import cromwell.backend.async.{AbortedExecutionHandle, ExecutionHandle, FailedNonRetryableExecutionHandle, FailedRetryableExecutionHandle, PendingExecutionHandle}
 import cromwell.backend.impl.jes.RunStatus.TerminalRunStatus
 import cromwell.backend.impl.jes.io._
 import cromwell.backend.impl.jes.statuspolling.{JesRunCreationClient, JesStatusRequestClient}
 import cromwell.backend.standard.{StandardAsyncExecutionActor, StandardAsyncExecutionActorParams, StandardAsyncJob}
 import cromwell.core._
+import cromwell.core.path.{DefaultPathBuilder, Path}
 import cromwell.core.logging.JobLogger
 import cromwell.core.path.{DefaultPathBuilder, Path}
 import cromwell.core.retry.SimpleExponentialBackoff
+import cromwell.filesystems.gcs.GcsPath
+import cromwell.services.keyvalue.KeyValueServiceActor._
 import cromwell.filesystems.gcs.GcsPath
 import org.slf4j.LoggerFactory
 import wdl4s._
@@ -36,11 +42,23 @@ object JesAsyncBackendJobExecutionActor {
     val GoogleComputeServiceAccount = "google_compute_service_account"
   }
 
-  type JesPendingExecutionHandle =
-    PendingExecutionHandle[StandardAsyncJob, Run, RunStatus]
+  type JesPendingExecutionHandle = PendingExecutionHandle[StandardAsyncJob, Run, RunStatus]
 
   private val ExtraConfigParamName = "__extra_config_gcs_path"
-  private def stringifyMap(m: Map[String, String]): String = m map { case(k, v) => s"  $k -> $v"} mkString "\n"
+
+  //RUCHI:: I also like the name maxUnexpectedRetries
+  val maxUnexpectedRetries = 2
+
+  val GoogleCancelledRpc = 1
+  val GoogleNotFoundRpc = 5
+  val GoogleAbortedRpc = 10 // Note "Aborted" here is not the same as our "abort"
+  val JesFailedToDelocalize = 5
+  val JesUnexpectedTermination = 13
+  val JesPreemption = 14
+
+  def StandardException(errorCode: Int, message: String, jobTag: String) = {
+    new RuntimeException(s"Task $jobTag failed: error code $errorCode.$message")
+  }
 }
 
 class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyncExecutionActorParams)
@@ -68,7 +86,8 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
   override lazy val executeOrRecoverBackOff = SimpleExponentialBackoff(
     initialInterval = 3 seconds, maxInterval = 20 seconds, multiplier = 1.1)
 
-  override lazy val retryable: Boolean = jobDescriptor.key.attempt <= runtimeAttributes.preemptible
+  private lazy val attempt: Int = jobDescriptor.key.attempt
+
   private lazy val cmdInput =
     JesFileInput(ExecParamName, jesCallPaths.script.pathAsString, DefaultPathBuilder.get(jesCallPaths.scriptFilename), workingDisk)
   private lazy val jesCommandLine = s"/bin/bash ${cmdInput.containerPath}"
@@ -78,11 +97,49 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
 
   private lazy val dockerConfiguration = jesConfiguration.dockerCredentials
 
+  private var preemptionCount: Option[Int] = None
+  private var unexpectedRetryCount: Option[Int] = None
+
+  override lazy val retryable: Boolean = preemptible || unexpectedRetryCount.get < maxUnexpectedRetries
+
+  private lazy val preemptible: Boolean = preemptionCount.get < maxPreemption
+
   override def tryAbort(job: StandardAsyncJob): Unit = {
     Run(job, initializationData.genomics).abort()
   }
 
-  override def receive: Receive = pollingActorClientReceive orElse runCreationClientReceive orElse super.receive
+  override def requestsAbortAndDiesImmediately: Boolean = true
+
+  override def preStart(): Unit = {
+    if(attempt.equals(1)) {
+      initializeRetryableCounts
+    }
+    else getRetryCounts
+  }
+
+  private def initializeRetryableCounts() = {
+    if(maxPreemption > 0) preemptionCount = Some(1)
+    else preemptionCount = Some(0)
+    unexpectedRetryCount = Some(0)
+
+    tellKvStore(kvJobKey, preemptionCountKey, preemptionCount.get.toString)
+    tellKvStore(kvJobKey, unexpectedRetryCountKey, unexpectedRetryCount.get.toString  )
+  }
+
+  override def receive: Receive = kvServiceActorReceive orElse pollingActorClientReceive orElse super.receive
+
+  //RUCHI:: remove extra logging
+  private def kvServiceActorReceive: Receive = {
+    case KvPair(k,Some(v)) if k.key.equals(preemptionCountKey) =>
+      jobLogger.info(s"For key $k found the preemption count $v")
+      preemptionCount = Some(v.toInt)
+    case KvPair(k,Some(v)) if k.key.equals(unexpectedRetryCountKey) =>
+      jobLogger.info(s"For key $k found the generic retry count $v")
+      unexpectedRetryCount = Some(v.toInt)
+    case KvKeyLookupFailed =>
+      jobLogger.info(s"Failed to find retry key of $jobTag") //this should never happen?
+    case KvFailure => jobLogger.info(s"Failed to look up the retry key of $jobTag")
+  }
 
   private def gcsAuthParameter: Option[JesInput] = {
     if (jesAttributes.auths.gcs.requiresAuthFile || dockerConfiguration.isDefined)
@@ -236,7 +293,7 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
       jesParameters,
       googleProject(jobDescriptor.workflowDescriptor),
       computeServiceAccount(jobDescriptor.workflowDescriptor),
-      retryable,
+      preemptible,
       initializationData.genomics
     )
     logger.debug(s"Inputs:\n${stringifyMap(runPipelineParameters.getPipelineArgs.getInputs.asScala.toMap)}")
@@ -252,6 +309,38 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
     runWithJes(None)
   }
 
+  //RUCHI:: Needs serious Cleanup
+  val preemptionCountKey = "PreemptionCount"
+  val unexpectedRetryCountKey = "UnexpectedRetryCount"
+  val kvJobKey = KvJobKey(jobDescriptor.key.call.fullyQualifiedName, jobDescriptor.key.index, jobDescriptor.key.attempt)
+  val futureKvJobKey = KvJobKey(jobDescriptor.key.call.fullyQualifiedName, jobDescriptor.key.index, jobDescriptor.key.attempt + 1)
+
+  def getRetryCounts() = {
+    askKvStore(kvJobKey, preemptionCountKey)
+    askKvStore(kvJobKey, unexpectedRetryCountKey)
+  }
+
+  def tellKvStore(kvJobKey: KvJobKey, key: String, value: String): Unit = {
+    val scopedKey = ScopedKey(workflowId, kvJobKey, key)
+    val kvValue = Some(value)
+    val kvPair = KvPair(scopedKey, kvValue)
+    val kvPut = KvPut(kvPair)
+    serviceRegistryActor ! kvPut
+  }
+
+  def askKvStore(kvJobKey: KvJobKey, key: String): Unit = {
+    val scopedKey = ScopedKey(workflowId, kvJobKey, key)
+    val kvGet = KvGet(scopedKey)
+    serviceRegistryActor ! kvGet
+  }
+
+  protected def runWithJes(runIdForResumption: Option[String]): ExecutionHandle = {
+    // Force runtimeAttributes to evaluate so we can fail quickly now if we need to:
+    Try(runtimeAttributes) match {
+      case Success(_) =>
+
+        val jesInputs: Set[JesInput] = generateJesInputs(jobDescriptor) ++ monitoringScript + cmdInput
+        val jesOutputs: Set[JesFileOutput] = generateJesOutputs(jobDescriptor) ++ monitoringOutput
   override def recoverAsync(jobId: StandardAsyncJob)(implicit ec: ExecutionContext): Future[ExecutionHandle] = {
     runWithJes(Option(jobId))
   }
@@ -279,8 +368,15 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
           runId <- runPipeline(initializationData.genomics, rpr)
           run = Run(runId, initializationData.genomics)
         } yield PendingExecutionHandle(jobDescriptor, runId, Option(run), previousStatus = None)
+        jobPaths.script.writeAsText(commandScriptContents)
+
+        val run = createJesRun(jesParameters, runIdForResumption)
+
+        PendingExecutionHandle(jobDescriptor, StandardAsyncJob(run.runId), Option(run), previousStatus = None)
+      case Failure(e) => FailedNonRetryableExecutionHandle(e)
     }
   }
+
 
   override def pollStatusAsync(handle: JesPendingExecutionHandle)
                               (implicit ec: ExecutionContext): Future[RunStatus] = {
@@ -344,62 +440,87 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
     }
   }
 
-  private def extractErrorCodeFromErrorMessage(errorMessage: String): Int = {
-    errorMessage.substring(0, errorMessage.indexOf(':')).toInt
-  }
-
-  private def preempted(errorCode: Int, errorMessage: String): Boolean = {
-    def isPreemptionCode(code: Int) = code == 13 || code == 14
-
-    try {
-      errorCode == 10 && isPreemptionCode(extractErrorCodeFromErrorMessage(errorMessage)) && preemptible
-    } catch {
-      case _: NumberFormatException | _: StringIndexOutOfBoundsException =>
-        jobLogger.warn(s"Unable to parse JES error code from error messages: [{}], assuming this was not a preempted VM.", errorMessage.mkString(", "))
-        false
+  override def retryEvaluateOutputs(exception: Exception): Boolean = {
+    exception match {
+      case aggregated: CromwellAggregatedException =>
+        aggregated.throwables.collectFirst { case s: SocketTimeoutException => s }.isDefined
+      case _ => false
     }
   }
 
+  // FIXME: all mods need a good dose of cleanup & dry
   override def handleExecutionFailure(runStatus: RunStatus,
-                                      handle: StandardAsyncPendingExecutionHandle,
-                                      returnCode: Option[Int]): ExecutionHandle = {
+                             handle: StandardAsyncPendingExecutionHandle,
+                             returnCode: Option[Int]): ExecutionHandle = {
+    // If one exists, extract the JES error code (not the google RPC) from the error message
+    def getJesErrorCode(errorMessage: String): Option[Int] = {
+      Try { errorMessage.substring(0, errorMessage.indexOf(':')).toInt } toOption
+    }
+
+    val failedStatus: TerminalRunStatus = runStatus match {
+      case failedStatus: RunStatus.Failed => failedStatus
+      case preemptedStatus: RunStatus.Preempted => preemptedStatus
+      case unknown => throw new RuntimeException(s"handleExecutionFailure not called with RunStatus.Failed or RunStatus.Preempted. Instead got $unknown")
+    }
+
+    val prettyPrintedError: String = failedStatus.errorMessage map { e => s" Message: $e" } getOrElse ""
+    val jesCode: Option[Int] = failedStatus.errorMessage flatMap getJesErrorCode
+
+    (failedStatus.errorCode, jesCode) match {
+      case (GoogleCancelledRpc, None) => AbortedExecutionHandle
+      case (GoogleNotFoundRpc, Some(JesFailedToDelocalize)) => FailedNonRetryableExecutionHandle(FailedToDelocalizeFailure(prettyPrintedError, jobTag, Option(jobPaths.stderr)))
+      case (GoogleAbortedRpc, Some(JesUnexpectedTermination)) => handleUnexpectedTermination(failedStatus.errorCode, prettyPrintedError, returnCode)
+      case (GoogleAbortedRpc, Some(JesPreemption)) => handlePreemption(failedStatus.errorCode, prettyPrintedError, returnCode)
+      case _ => FailedNonRetryableExecutionHandle(StandardException(failedStatus.errorCode, prettyPrintedError, jobTag), returnCode)
+    }
+  }
+
+  private def handleUnexpectedTermination(errorCode: Int, errorMessage: String, jobReturnCode: Option[Int]): ExecutionHandle = {
+
+    val msg = s"Retrying. $errorMessage"
+
+    if (unexpectedRetryCount.get < maxUnexpectedRetries) {
+
+      //Increment unexpected retry count and preemption count stays the same
+      tellKvStore(futureKvJobKey, unexpectedRetryCountKey, (unexpectedRetryCount.get + 1).toString)
+      tellKvStore(futureKvJobKey, preemptionCountKey, preemptionCount.get.toString )
+
+      FailedRetryableExecutionHandle(StandardException(errorCode, msg, jobTag), jobReturnCode)
+    }
+    else {
+      FailedNonRetryableExecutionHandle(StandardException(errorCode, errorMessage, jobTag), jobReturnCode)
+    }
+  }
+
+  private def handlePreemption(errorCode: Int, errorMessage: String, jobReturnCode: Option[Int]): ExecutionHandle = {
     import lenthall.numeric.IntegerUtil._
 
-    val failed = runStatus match {
-      case failedStatus: RunStatus.Failed => failedStatus
-      case unknown => throw new RuntimeException(s"handleExecutionFailure not called with RunStatus.Failed. Instead got $unknown")
-    }
-
-    // In the event that the error isn't caught by the special cases, this will be used
-    def nonRetryableException = {
-      val exception = failed.toFailure(jobPaths.jobKey.tag, Option(jobPaths.stderr))
-      FailedNonRetryableExecutionHandle(exception, returnCode)
-    }
 
     val errorCode = failed.errorCode
     val taskName = s"${workflowDescriptor.id}:${call.unqualifiedName}"
-    val attempt = jobDescriptor.key.attempt
+    val baseMsg = s"Task $taskName was preempted for the ${preemptionCount.get.toOrdinal} time."
 
-    failed.errorMessage match {
-      case Some(errorMessage) =>
-        if (errorMessage.contains("Operation canceled at"))  {
-          AbortedExecutionHandle
-        } else if (preempted(errorCode, errorMessage)) {
-          val preemptedMsg = s"Task $taskName was preempted for the ${attempt.toOrdinal} time."
-          if (attempt < maxPreemption) {
-            val e = PreemptedException(
-              s"""$preemptedMsg The call will be restarted with another preemptible VM (max preemptible attempts number is $maxPreemption).
-                 |Error code $errorCode. Message: $errorMessage""".stripMargin
-            )
-            FailedRetryableExecutionHandle(e, returnCode)
-          } else {
-            val e = PreemptedException(
-              s"""$preemptedMsg The maximum number of preemptible attempts ($maxPreemption) has been reached. The call will be restarted with a non-preemptible VM.
-                 |Error code $errorCode. Message: $errorMessage)""".stripMargin)
-            FailedRetryableExecutionHandle(e, returnCode)
-          }
-        } else { nonRetryableException }
-      case None => nonRetryableException
+    /*
+      FIXME: This is wrong! These are both retryable errors, the only difference here is in determining what message
+      we're handing back to the user. For preemption even when we've exhausted our retries we want to kick it back
+      with a non-preemptible so just hand back a Retryable handle for both cases.
+
+      That means that the "if" is just building the string and we can have the same return value outside of the if
+     */
+    if (preemptionCount.get < maxPreemption) {
+
+      //Increment preemmption count and unexpectedRetryCount stays the same
+      tellKvStore(futureKvJobKey, preemptionCountKey, (preemptionCount.get+1).toString)
+      tellKvStore(futureKvJobKey, unexpectedRetryCountKey, unexpectedRetryCount.get.toString )
+
+      val msg = s"""$baseMsg The call will be restarted with another preemptible VM (max preemptible attempts number is $maxPreemption).
+                    | Error code $errorCode.$errorMessage""".stripMargin
+      FailedRetryableExecutionHandle(StandardException(errorCode, msg, jobTag), jobReturnCode)
+    } else {
+      val msg = s"""$baseMsg The maximum number of preemptible attempts ($maxPreemption) has been reached.
+                   | The call will be restarted with a non-preemptible VM.
+                   |Error code $errorCode.$errorMessage)""".stripMargin
+      FailedRetryableExecutionHandle(StandardException(errorCode, msg, jobTag), jobReturnCode)
     }
   }
 
@@ -408,7 +529,9 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
       case Success(gcsPath: GcsPath) =>
         val localPath = workingDisk.mountPoint.resolve(gcsPath.pathWithoutScheme).pathAsString
         WdlFile(localPath, wdlFile.isGlob)
-      case _ => wdlFile
+      case _
+
+      => wdlFile
     }
   }
 }

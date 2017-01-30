@@ -45,10 +45,10 @@ case class JesBackendLifecycleActorFactory(name: String, configurationDescriptor
   override def backendSingletonActorProps = Option(JesBackendSingletonActor.props(jesConfiguration.qps))
 
   override lazy val fileHashingFunction: Option[FileHashingFunction] = Option(FileHashingFunction(JesBackendFileHashing.getCrc32c))
-  
+
   override def dockerHashCredentials(initializationData: Option[BackendInitializationData]) = {
     Try(BackendInitializationData.as[JesBackendInitializationData](initializationData)) match {
-      case Success(jesData) => 
+      case Success(jesData) =>
         val maybeDockerHubCredentials = jesData.jesConfiguration.dockerCredentials
         val googleCredentials = Option(jesData.gcsCredentials.credential)
         List(maybeDockerHubCredentials, googleCredentials).flatten
