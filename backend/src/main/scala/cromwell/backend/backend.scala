@@ -67,4 +67,5 @@ final case class AttemptedLookupResult(name: String, value: Try[WdlValue]) {
   def toPair = name -> value
 }
 
+// FIXME: Remove
 case class PreemptedException(msg: String) extends Exception(msg)

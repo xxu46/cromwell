@@ -46,13 +46,7 @@ case class WorkflowExecutionActor(workflowDescriptor: EngineWorkflowDescriptor,
   override val workflowIdForCallMetadata = workflowDescriptor.id
 
   private val tag = s"WorkflowExecutionActor [UUID(${workflowDescriptor.id.shortString})]"
-  private val MaxRetries = ConfigFactory.load().as[Option[Int]]("system.max-retries") match {
-    case Some(value) => value
-    case None =>
-      workflowLogger.warn(s"Failed to load the max-retries value from the configuration. Defaulting back to a value of '$DefaultMaxRetriesFallbackValue'.")
-      DefaultMaxRetriesFallbackValue
-  }
-  
+
   private val backendFactories = TryUtil.sequenceMap(workflowDescriptor.backendAssignments.values.toSet[String] map { backendName =>
     backendName -> CromwellBackends.backendLifecycleFactoryActorByName(backendName)
   } toMap) recover {
@@ -289,19 +283,13 @@ case class WorkflowExecutionActor(workflowDescriptor: EngineWorkflowDescriptor,
   }
 
   private def handleRetryableFailure(jobKey: BackendJobDescriptorKey, reason: Throwable, returnCode: Option[Int]) = {
-    // We start with index 1 for #attempts, hence invariant breaks only if jobKey.attempt > MaxRetries
-    if (jobKey.attempt <= MaxRetries) {
-      val newJobKey = jobKey.copy(attempt = jobKey.attempt + 1)
-      workflowLogger.info(s"Retrying job execution for ${newJobKey.tag}")
-      /*  Currently, we update the status of the old key to Preempted, and add a new entry (with the #attempts incremented by 1)
-        * to the execution store with status as NotStarted. This allows startRunnableCalls to re-execute this job */
-      val executionDiff = WorkflowExecutionDiff(Map(jobKey -> ExecutionStatus.Preempted, newJobKey -> ExecutionStatus.NotStarted))
-      val newData = stateData.mergeExecutionDiff(executionDiff).removeCallExecutionActor(jobKey)
-      stay() using startRunnableScopes(newData)
-    } else {
-      workflowLogger.warn(s"Exhausted maximum number of retries for job ${jobKey.tag}. Failing.")
-      goto(WorkflowExecutionFailedState) using stateData.mergeExecutionDiff(WorkflowExecutionDiff(Map(jobKey -> ExecutionStatus.Failed))).removeCallExecutionActor(jobKey)
-    }
+    val newJobKey = jobKey.copy(attempt = jobKey.attempt + 1)
+    workflowLogger.info(s"Retrying job execution for ${newJobKey.tag}")
+    /*  Currently, we update the status of the old key to RetryableFailure, and add a new entry (with the #attempts incremented by 1)
+      * to the execution store with status as NotStarted. This allows startRunnableCalls to re-execute this job */
+    val executionDiff = WorkflowExecutionDiff(Map(jobKey -> ExecutionStatus.RetryableFailure, newJobKey -> ExecutionStatus.NotStarted))
+    val newData = stateData.mergeExecutionDiff(executionDiff).removeCallExecutionActor(jobKey)
+    stay() using startRunnableScopes(newData)
   }
 
   private def handleCallSuccessful(jobKey: JobKey, outputs: CallOutputs, data: WorkflowExecutionActorData, jobExecutionMap: JobExecutionMap) = {
