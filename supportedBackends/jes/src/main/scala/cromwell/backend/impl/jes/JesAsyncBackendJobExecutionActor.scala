@@ -73,7 +73,11 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
   override lazy val executeOrRecoverBackOff = SimpleExponentialBackoff(
     initialInterval = 3 seconds, maxInterval = 20 seconds, multiplier = 1.1)
 
-  // FIXME: this needs to change to handle more than just preemption
+  /*
+    FIXME: I'm pretty sure this should just be hardcoded to false. However we need a second value which is almost
+    this, let's call it "val retryable: Boolean" which instead of attempt # is comparing the preemption count (pull this from
+    the KV store). This value will be used to let the Run know if we want a preemptible VM or not.
+   */
   override lazy val retryable: Boolean = jobDescriptor.key.attempt <= runtimeAttributes.preemptible
   private lazy val cmdInput =
     JesFileInput(ExecParamName, jesCallPaths.script.pathAsString, DefaultPathBuilder.get(jesCallPaths.scriptFilename), workingDisk)
@@ -245,7 +249,7 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
       jesParameters,
       googleProject(jobDescriptor.workflowDescriptor),
       computeServiceAccount(jobDescriptor.workflowDescriptor),
-      retryable, // FIXME: This maps to 'preemptible' on the other side, so not the same in new world
+      retryable, // FIXME: This should not be `retryable` but the `preemptible` variable I described above
       initializationData.genomics
     )
   }
@@ -354,11 +358,10 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
     val jesCode: Option[Int] = runStatus.errorMessage flatMap getJesErrorCode
 
     (runStatus.errorCode, jesCode) match {
-      case (GoogleAbortedRpc, None) => AbortedExecutionHandle
+      case (GoogleCancelledRpc, None) => AbortedExecutionHandle
       case (GoogleNotFoundRpc, Some(JesFailedToDelocalize)) => FailedNonRetryableExecutionHandle(FailedToDelocalizeFailure(prettyPrintedError, jobTag, Option(jobPaths.stderr)))
-        // FIXME: probably better here and premption to have a single case which calls a function which does all the magic
-      case (GoogleCancelledRpc, Some(JesUnexpectedTermination)) => handleUnexpectedTermination(runStatus.errorCode, prettyPrintedError, returnCode)
-      case (GoogleCancelledRpc, Some(JesPreemption)) => handlePreemption(runStatus.errorCode, prettyPrintedError, returnCode)
+      case (GoogleAbortedRpc, Some(JesUnexpectedTermination)) => handleUnexpectedTermination(runStatus.errorCode, prettyPrintedError, returnCode)
+      case (GoogleAbortedRpc, Some(JesPreemption)) => handlePreemption(runStatus.errorCode, prettyPrintedError, returnCode)
       case _ => FailedNonRetryableExecutionHandle(StandardException(runStatus.errorCode, prettyPrintedError, jobTag), returnCode)
     }
   }
@@ -384,6 +387,13 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
     val taskName = s"${workflowDescriptor.id}:${call.unqualifiedName}"
     val baseMsg = s"Task $taskName was preempted for the ${preemptionCount.toOrdinal} time."
 
+    /*
+      FIXME: This is wrong! These are both retryable errors, the only difference here is in determining what message
+      we're handing back to the user. For preemption even when we've exhausted our retries we want to kick it back
+      with a non-preemptible so just hand back a Retryable handle for both cases.
+
+      That means that the "if" is just building the string and we can have the same return value outside of the if
+     */
     if (preemptionCount < maxPreemption) {
       // FIXME: Increment preemption count
       val msg = s"""$baseMsg The call will be restarted with another preemptible VM (max preemptible attempts number is $maxPreemption).

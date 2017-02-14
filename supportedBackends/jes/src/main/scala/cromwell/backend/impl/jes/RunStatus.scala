@@ -37,16 +37,5 @@ object RunStatus {
                           instanceName: Option[String]) extends TerminalRunStatus {
     // Don't want to include errorMessage or code in the snappy status toString:
     override def toString = "Failed"
-    def toJesError: Option[KnownJesError] = KnownJesError.fromFailedStatus(this)
-
-    def toException(jobTag: String, stderrPath: Option[Path]): Exception = {
-      toJesError map { _.toException(errorMessage.getOrElse(""), jobTag, stderrPath) } getOrElse unknownError(jobTag)
-    }
-
-    private def unknownError(jobTag: String): RuntimeException = {
-      val baseMessage = s"Task $jobTag failed: error code $errorCode."
-      val message = errorMessage map { e => s"$baseMessage Message: $e" } getOrElse baseMessage
-      new RuntimeException(message)
-    }
   }
 }
