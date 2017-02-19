@@ -15,8 +15,6 @@ trait MetadataSlickDatabase extends MetadataSqlDatabase {
 
   override def addMetadataEntries(metadataEntries: Iterable[MetadataEntry])
                                  (implicit ec: ExecutionContext): Future[Unit] = {
-    val z = metadataEntries filter { m => m.metadataKey == "workflowName" }
-    z foreach { x => System.out.println("JGG: HERE IS: |" + x.metadataValue + "|")}
     val action = DBIO.seq(metadataEntries.grouped(insertBatchSize).map(dataAccess.metadataEntries ++= _).toSeq:_*)
     runTransaction(action).map(_ => ())
   }
