@@ -76,6 +76,7 @@ trait MetadataDatabaseAccess {
       val value = metadataEvent.value map { _.value }
       val valueType = metadataEvent.value map { _.valueType.typeName }
       val jobKey = key.jobKey map { jk => (jk.callFqn, jk.index, jk.attempt) }
+      if (key.key == "workflowName") System.out.println("JGG: RECEIVED WORKFLOW NAME: |" + value + "|")
       MetadataEntry(workflowUuid, jobKey.map(_._1), jobKey.flatMap(_._2), jobKey.map(_._3),
         key.key, value.toClob, valueType, timestamp)
     }

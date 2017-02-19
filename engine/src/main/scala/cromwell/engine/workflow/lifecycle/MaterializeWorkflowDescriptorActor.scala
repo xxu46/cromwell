@@ -184,7 +184,7 @@ class MaterializeWorkflowDescriptorActor(serviceRegistryActor: ActorRef,
   private def pushWfNameMetadataService(name: String): Unit = {
     // Workflow name:
     val nameEvent = MetadataEvent(MetadataKey(workflowIdForLogging, None, WorkflowMetadataKeys.Name), MetadataValue(name))
-
+    log.info("JGG: PUSHING NAME: |" + name + "|")
     serviceRegistryActor ! PutMetadataAction(nameEvent)
   }
 
