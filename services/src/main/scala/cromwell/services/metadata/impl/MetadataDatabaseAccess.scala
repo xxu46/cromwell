@@ -24,9 +24,12 @@ object MetadataDatabaseAccess {
         thatStatus <- summary2.workflowStatus map WorkflowState.fromString
       } yield (thisStatus |+| thatStatus).toString
 
+      val z = summary1.workflowName orElse summary2.workflowName
+      System.out.println(s"JGG: 1) ${summary1.workflowName}, 2) ${summary2.workflowName}, 3) $z")
+
       WorkflowMetadataSummaryEntry(
         workflowExecutionUuid = summary1.workflowExecutionUuid,
-        workflowName = summary1.workflowName orElse summary2.workflowName,
+        workflowName = z,
         workflowStatus = resolvedStatus orElse summary1.workflowStatus orElse summary2.workflowStatus,
         startTimestamp = summary1.startTimestamp orElse summary2.startTimestamp,
         endTimestamp = summary1.endTimestamp orElse summary2.endTimestamp
@@ -76,7 +79,6 @@ trait MetadataDatabaseAccess {
       val value = metadataEvent.value map { _.value }
       val valueType = metadataEvent.value map { _.valueType.typeName }
       val jobKey = key.jobKey map { jk => (jk.callFqn, jk.index, jk.attempt) }
-      if (key.key == "workflowName") System.out.println("JGG: RECEIVED WORKFLOW NAME: |" + value + "|")
       MetadataEntry(workflowUuid, jobKey.map(_._1), jobKey.flatMap(_._2), jobKey.map(_._3),
         key.key, value.toClob, valueType, timestamp)
     }
