@@ -32,7 +32,7 @@ final case class WriteMetadataActor(batchRate: Int, flushRate: FiniteDuration)
         case e => stay using e
       }
     case Event(ScheduledFlushToDb, curData) =>
-      log.debug("Initiating periodic metadata flush to DB")
+      log.info("Initiating periodic metadata flush to DB")
       goto(WritingToDb) using curData
   }
 
@@ -40,10 +40,10 @@ final case class WriteMetadataActor(batchRate: Int, flushRate: FiniteDuration)
     case Event(ScheduledFlushToDb, curData) => stay using curData
     case Event(PutMetadataAction(events), curData) => stay using curData.addEvents(events)
     case Event(FlushBatchToDb, NoEvents) =>
-      log.debug("Attempted metadata flush to DB but had nothing to write")
+      log.info("Attempted metadata flush to DB but had nothing to write")
       goto(WaitingToWrite) using NoEvents
     case Event(FlushBatchToDb, HasEvents(e)) =>
-      log.debug("Flushing {} metadata events to the DB", e.length)
+      log.info("Flushing {} metadata events to the DB", e.length)
       addMetadataEvents(e.toVector) onComplete {
         case Success(_) => self ! DbWriteComplete
         case Failure(regerts) =>
@@ -53,7 +53,7 @@ final case class WriteMetadataActor(batchRate: Int, flushRate: FiniteDuration)
 
       stay using NoEvents
     case Event(DbWriteComplete, curData) =>
-      log.debug("Flush of metadata events complete")
+      log.info("Flush of metadata events complete")
       goto(WaitingToWrite) using curData
   }
 
