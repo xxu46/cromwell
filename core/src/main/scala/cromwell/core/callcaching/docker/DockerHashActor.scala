@@ -88,16 +88,16 @@ final class DockerHashActor(
       partitionFlows.out(i) ~> flows(i) ~> mergeFlows.in(i)
     }
 
-    val noMatch = partitionFlows.out(dockerRegistryFlows.size).map(dockerContext => (DockerHashUnknownRegistry(dockerContext.dockerImageID), dockerContext)).outlet
+    val noMatch = partitionFlows.out(dockerRegistryFlows.size).map(dockerContext => (DockerHashUnknownRegistry(dockerContext.request), dockerContext)).outlet
     
     noMatch ~> mergeFlows.in(dockerRegistryFlows.size)
     
     FlowShape(partitionFlows.in, mergeFlows.out)
   }
 
-  private def checkCache(dockerImageIdentifierWithoutHash: DockerImageIdentifierWithoutHash) = {
-    Option(cache.getIfPresent(dockerImageIdentifierWithoutHash)) map { hashResult => 
-      DockerHashResponseSuccess(hashResult) 
+  private def checkCache(dockerHashRequest: DockerHashRequest) = {
+    Option(cache.getIfPresent(dockerHashRequest.dockerImageID)) map { hashResult => 
+      DockerHashResponseSuccess(hashResult, dockerHashRequest) 
     }
   }
 
@@ -105,7 +105,7 @@ final class DockerHashActor(
     case request: DockerHashRequest =>
       val replyTo = sender()
 
-      checkCache(request.dockerImageID) match {
+      checkCache(request) match {
         case Some(cacheHit) => replyTo ! cacheHit
         case None => sendToStream(DockerHashContext(request, replyTo))
       }
@@ -121,24 +121,26 @@ object DockerHashActor {
   val logger = LoggerFactory.getLogger("DockerRegistry")
 
   /* Response Messages */
-  sealed trait DockerHashResponse
+  sealed trait DockerHashResponse {
+    def request: DockerHashRequest
+  }
   
-  case class DockerHashResponseSuccess(dockerHash: DockerHashResult) extends DockerHashResponse
+  case class DockerHashResponseSuccess(dockerHash: DockerHashResult, request: DockerHashRequest) extends DockerHashResponse
   
   sealed trait DockerHashFailureResponse extends DockerHashResponse {
     def reason: String
   }
-  case class DockerHashFailedResponse(failure: Throwable, dockerIdentifier: DockerImageIdentifierWithoutHash) extends DockerHashFailureResponse {
-    override val reason = s"Failed to get docker hash for ${dockerIdentifier.fullName} ${failure.getMessage}"
+  case class DockerHashFailedResponse(failure: Throwable, request: DockerHashRequest) extends DockerHashFailureResponse {
+    override val reason = s"Failed to get docker hash for ${request.dockerImageID.fullName} ${failure.getMessage}"
   }
-  case class DockerHashUnknownRegistry(dockerImageId: DockerImageIdentifierWithoutHash) extends DockerHashFailureResponse {
-    override val reason = s"Registry ${dockerImageId.host} is not supported"
+  case class DockerHashUnknownRegistry(request: DockerHashRequest) extends DockerHashFailureResponse {
+    override val reason = s"Registry ${request.dockerImageID.host} is not supported"
   }
-  case class DockerHashNotFound(dockerImageId: DockerImageIdentifierWithoutHash) extends DockerHashFailureResponse {
-    override val reason = s"Docker image ${dockerImageId.fullName} not found"
+  case class DockerHashNotFound(request: DockerHashRequest) extends DockerHashFailureResponse {
+    override val reason = s"Docker image ${request.dockerImageID.fullName} not found"
   }
-  case class DockerHashUnauthorized(dockerImageId: DockerImageIdentifierWithoutHash) extends DockerHashFailureResponse {
-    override val reason = s"Unauthorized to get docker hash ${dockerImageId.fullName}"
+  case class DockerHashUnauthorized(request: DockerHashRequest) extends DockerHashFailureResponse {
+    override val reason = s"Unauthorized to get docker hash ${request.dockerImageID.fullName}"
   }
 
   /* Internal ADTs */

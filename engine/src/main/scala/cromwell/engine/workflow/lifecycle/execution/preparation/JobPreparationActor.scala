@@ -4,7 +4,6 @@ import akka.actor.{ActorRef, FSM, Props}
 import cromwell.backend._
 import cromwell.backend.validation.RuntimeAttributesKeys
 import cromwell.core.Dispatcher.EngineDispatcher
-import cromwell.core.actor.RobustClientHelper
 import cromwell.core.callcaching._
 import cromwell.core.callcaching.docker.DockerHashActor.{DockerHashFailureResponse, DockerHashResponseSuccess}
 import cromwell.core.callcaching.docker._
@@ -27,7 +26,7 @@ case class JobPreparationActor(executionData: WorkflowExecutionActorData,
                                      serviceRegistryActor: ActorRef,
                                      ioActor: ActorRef,
                                      backendSingletonActor: Option[ActorRef])
-  extends FSM[JobPreparationActorState, Option[JobPreparationActorData]] with WorkflowLogging with RobustClientHelper {
+  extends FSM[JobPreparationActorState, Option[JobPreparationActorData]] with WorkflowLogging with DockerClientHelper {
 
   lazy val workflowIdForLogging = workflowDescriptor.id
   
@@ -36,11 +35,15 @@ case class JobPreparationActor(executionData: WorkflowExecutionActorData,
   // Amount of time to wait when we get a Backpressure response before sending the request again
   override protected def backpressureRandomizerFactor: Double = 0.5D
   
+  protected lazy val noResponsTimeout: FiniteDuration = 3 minutes
+  
   private lazy val workflowDescriptor = executionData.workflowDescriptor
   private lazy val expressionLanguageFunctions = factory.expressionLanguageFunctions(workflowDescriptor.backendDescriptor, jobKey, initializationData)
   private lazy val dockerHashCredentials = factory.dockerHashCredentials(initializationData)
   
   startWith(Idle, None)
+  
+  context.become(dockerReceive orElse receive)
 
   when(Idle) {
     case Event(Start, _) =>
@@ -51,7 +54,7 @@ case class JobPreparationActor(executionData: WorkflowExecutionActorData,
   }
 
   when(WaitingForDockerHash) {
-    case Event(DockerHashResponseSuccess(dockerHash), Some(data)) =>
+    case Event(DockerHashResponseSuccess(dockerHash, _), Some(data)) =>
       handleDockerHashSuccess(dockerHash, data)
     case Event(failureResponse: DockerHashFailureResponse, Some(data)) =>
       log.warning(failureResponse.reason)
@@ -77,7 +80,7 @@ case class JobPreparationActor(executionData: WorkflowExecutionActorData,
     def sendDockerRequest(dockerImageId: DockerImageIdentifierWithoutHash) = {
       val dockerHashRequest = DockerHashRequest(dockerImageId, dockerHashCredentials)
       val newData = JobPreparationActorData(dockerHashRequest, inputs, attributes)
-      dockerHashingActor ! dockerHashRequest
+      sendDockerCommand(dockerHashRequest, noResponsTimeout)
       goto(WaitingForDockerHash) using Option(newData)
     }
     
