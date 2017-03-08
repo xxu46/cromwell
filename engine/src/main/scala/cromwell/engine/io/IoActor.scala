@@ -116,7 +116,7 @@ object IoActor {
   type IoResult = (IoAck[_], IoCommandContext[_])
   
   /** Maximum number of times a command will be attempted: First attempt + 3 retries */
-  val MaxAttemptsNumber = 1 + 3
+  val MaxAttemptsNumber = 4
 
   case class DefaultCommandContext[T](request: IoCommand[T], replyTo: ActorRef, override val clientContext: Option[Any] = None) extends IoCommandContext[T]
 
