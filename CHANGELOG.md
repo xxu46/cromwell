@@ -1,5 +1,27 @@
 # Cromwell Change Log
 
+## 26
+
+### Breaking Changes
+
+* Failure metadata for calls and workflows was being displayed inconsistently, with different formats depending on the originating Cromwell version. Failures will now always present as an array of JSON objects each representing a failure. Each failure will have a message and a causedBy field. The causedBy field will be an array of similar failure objects. An example is given below:
+
+```
+failures: [{
+  message: "failure1",
+  causedBy: [{
+    message: "cause1",
+    causedBy: []
+   }, {
+    message: "cause2",
+    causedBy: []
+  }]
+ }, {
+  message: "failure2",
+  causedBy: []
+}]
+```
+
 ## 25
 
 ### External Contributors
