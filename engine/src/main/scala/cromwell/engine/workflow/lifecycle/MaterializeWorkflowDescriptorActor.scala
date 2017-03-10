@@ -352,19 +352,19 @@ class MaterializeWorkflowDescriptorActor(serviceRegistryActor: ActorRef,
     }
 
     def importsAsNamespace(importsDir: Path): ErrorOr[WdlNamespaceWithWorkflow] = {
-        writeMetadatae(importsDir)
-        val importsDirFile = better.files.File(importsDir.pathAsString) // For wdl4s better file compatibility
+      writeMetadatae(importsDir)
+      val importsDirFile = better.files.File(importsDir.pathAsString) // For wdl4s better file compatibility
       val importResolvers: Seq[ImportResolver] = if (importLocalFilesystem) {
           List(WdlNamespace.directoryResolver(importsDirFile), WdlNamespace.fileResolver)
         } else {
           List(WdlNamespace.directoryResolver(importsDirFile))
         }
-        val results = WdlNamespaceWithWorkflow.load(w.wdlSource, importResolvers)
-        importsDir.delete(swallowIOExceptions = true)
-        results match {
-          case Success(ns) => ns.validNel
-          case Failure(f) => f.getMessage.invalidNel
-        }
+      val results = WdlNamespaceWithWorkflow.load(w.wdlSource, importResolvers)
+      importsDir.delete(swallowIOExceptions = true)
+      results match {
+        case Success(ns) => ns.validNel
+        case Failure(f) => f.getMessage.invalidNel
+      }
     }
 
     validateImportsDirectory(w.importsZip) flatMap importsAsNamespace
