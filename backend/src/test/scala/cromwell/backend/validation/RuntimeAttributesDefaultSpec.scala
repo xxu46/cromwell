@@ -96,15 +96,14 @@ class RuntimeAttributesDefaultSpec extends FlatSpec with Matchers {
       "c" -> WdlString("c")
     )
 
-    withDefaults(rawAttributes, List(default1, default2)) should contain theSameElementsAs
-      Map(
+    withDefaults(rawAttributes, List(default1, default2)) should contain theSameElementsAs Map(
       "a" -> WdlString("a"),
       "b" -> WdlString("b"),
       "c" -> WdlString("c")
     )
   }
 
-    "noValueFoundFor" should "provide an invalidNel for missing values" in {
+  "noValueFoundFor" should "provide an invalidNel for missing values" in {
     import cats.syntax.validated._
     noValueFoundFor("myKey") shouldBe "Can't find an attribute value for key myKey".invalidNel
   }
