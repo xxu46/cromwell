@@ -535,7 +535,7 @@ trait StandardAsyncExecutionActor extends AsyncBackendJobExecutionActor with Sta
         queued up and may still be run by the thread pool anytime in the future. Issue #1218 may address this
         inconsistency at a later time. For now, just go back and check if we missed the abort command.
         */
-        self ! CheckMissedAbort
+        self ! CheckMissedAbort(handle.pendingJob)
       case _ =>
     }
     executionHandle
