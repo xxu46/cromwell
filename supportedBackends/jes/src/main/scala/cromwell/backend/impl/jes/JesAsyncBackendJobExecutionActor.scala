@@ -27,7 +27,7 @@ import wdl4s.values._
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.language.postfixOps
-import scala.util.{Failure, Success, Try}
+import scala.util.{Success, Try}
 import scala.collection.JavaConverters._
 
 object JesAsyncBackendJobExecutionActor {
@@ -118,7 +118,7 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
     if(attempt.equals(1)) {
       initializeRetryableCounts()
     }
-    else getRetryCounts()
+    else askKvStoreForRetryCounts()
   }
 
   private def initializeRetryableCounts() = {
@@ -319,7 +319,7 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
   val kvJobKey = KvJobKey(jobDescriptor.key.call.fullyQualifiedName, jobDescriptor.key.index, jobDescriptor.key.attempt)
   val futureKvJobKey = KvJobKey(jobDescriptor.key.call.fullyQualifiedName, jobDescriptor.key.index, jobDescriptor.key.attempt + 1)
 
-  def getRetryCounts() = {
+  def askKvStoreForRetryCounts() = {
     askKvStore(kvJobKey, preemptionCountKey)
     askKvStore(kvJobKey, unexpectedRetryCountKey)
   }
@@ -336,23 +336,6 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
     val scopedKey = ScopedKey(workflowId, kvJobKey, key)
     val kvGet = KvGet(scopedKey)
     serviceRegistryActor ! kvGet
-  }
-
-  protected def runWithJes(runIdForResumption: Option[String]): ExecutionHandle = {
-    // Force runtimeAttributes to evaluate so we can fail quickly now if we need to:
-    Try(runtimeAttributes) match {
-      case Success(_) =>
-        val command = instantiatedCommand
-        val jesInputs: Set[JesInput] = generateJesInputs(jobDescriptor) ++ monitoringScript + cmdInput
-        val jesOutputs: Set[JesFileOutput] = generateJesOutputs(jobDescriptor) ++ monitoringOutput
-        val withMonitoring = monitoringOutput.isDefined
-
-        uploadCommandScript(command, withMonitoring, backendEngineFunctions.findGlobOutputs(call, jobDescriptor))
-        val run: Run = createJesRun(jesParameters, runIdForResumption)
-
-          PendingExecutionHandle(jobDescriptor, StandardAsyncJob(run.runId), Option(run), previousStatus = None)
-      case Failure(e) => FailedNonRetryableExecutionHandle(e)
-    }
   }
 
   override def recoverAsync(jobId: StandardAsyncJob)(implicit ec: ExecutionContext): Future[ExecutionHandle] = {
@@ -382,12 +365,6 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
           runId <- runPipeline(initializationData.genomics, rpr)
           run = Run(runId, initializationData.genomics)
         } yield PendingExecutionHandle(jobDescriptor, runId, Option(run), previousStatus = None)
-        jobPaths.script.writeAsText(commandScriptContents)
-
-        val run = createJesRun(jesParameters, runIdForResumption)
-
-        PendingExecutionHandle(jobDescriptor, StandardAsyncJob(run.runId), Option(run), previousStatus = None)
-      case Failure(e) => FailedNonRetryableExecutionHandle(e)
     }
   }
 
@@ -443,14 +420,6 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
       case successStatus: RunStatus.Success => successStatus.eventList
       case unknown =>
         throw new RuntimeException(s"handleExecutionSuccess not called with RunStatus.Success. Instead got $unknown")
-    }
-  }
-
-  override def retryEvaluateOutputs(exception: Exception): Boolean = {
-    exception match {
-      case aggregated: CromwellAggregatedException =>
-        aggregated.throwables.collectFirst { case s: SocketTimeoutException => s }.isDefined
-      case _ => false
     }
   }
 
