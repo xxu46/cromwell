@@ -341,6 +341,8 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
 
         val jesInputs: Set[JesInput] = generateJesInputs(jobDescriptor) ++ monitoringScript + cmdInput
         val jesOutputs: Set[JesFileOutput] = generateJesOutputs(jobDescriptor) ++ monitoringOutput
+    }
+  }
   override def recoverAsync(jobId: StandardAsyncJob)(implicit ec: ExecutionContext): Future[ExecutionHandle] = {
     runWithJes(Option(jobId))
   }
