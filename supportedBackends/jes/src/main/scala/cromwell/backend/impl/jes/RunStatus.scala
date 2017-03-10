@@ -1,8 +1,6 @@
 package cromwell.backend.impl.jes
 
-import cromwell.backend.impl.jes.errors.JesError
 import cromwell.core.ExecutionEvent
-import cromwell.core.path.Path
 
 sealed trait RunStatus {
   import RunStatus._
@@ -23,11 +21,17 @@ object RunStatus {
     def machineType: Option[String]
     def zone: Option[String]
     def instanceName: Option[String]
+  }
+
+  sealed trait UnsuccessfulRunStatus extends TerminalRunStatus {
     def errorMessage: Option[String]
     def errorCode: Int
   }
 
-  case class Success(eventList: Seq[ExecutionEvent], machineType: Option[String], zone: Option[String], instanceName: Option[String], errorMessage: Option[String] = None) extends RunStatus {
+  case class Success(eventList: Seq[ExecutionEvent],
+                     machineType: Option[String],
+                     zone: Option[String],
+                     instanceName: Option[String]) extends TerminalRunStatus {
     override def toString = "Success"
   }
 
@@ -36,19 +40,16 @@ object RunStatus {
                           eventList: Seq[ExecutionEvent],
                           machineType: Option[String],
                           zone: Option[String],
-                          instanceName: Option[String]) extends TerminalRunStatus {
-    // Don't want to include errorMessage or code in the snappy status toString:
+                          instanceName: Option[String]) extends UnsuccessfulRunStatus {
     override def toString = "Failed"
   }
 
-  //RUCHI:: Added preempted runStatus --> to be added to the list of BackendStatuses
   final case class Preempted(errorCode: Int,
                           errorMessage: Option[String],
                           eventList: Seq[ExecutionEvent],
                           machineType: Option[String],
                           zone: Option[String],
-                          instanceName: Option[String]) extends TerminalRunStatus {
-
+                          instanceName: Option[String]) extends UnsuccessfulRunStatus {
     override def toString = "Preempted"
   }
 }
