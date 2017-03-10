@@ -6,20 +6,17 @@ import akka.actor.ActorRef
 import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import com.google.api.services.genomics.model.RunPipelineRequest
 import cromwell.backend._
-import cromwell.backend.async.{AbortedExecutionHandle, ExecutionHandle, FailedNonRetryableExecutionHandle, FailedRetryableExecutionHandle, PendingExecutionHandle}
-import cromwell.backend.impl.jes.RunStatus.{TerminalRunStatus}
-import cromwell.backend.impl.jes.errors._
+import cromwell.backend.impl.jes.RunStatus.UnsuccessfulRunStatus
 import cromwell.backend.async.{AbortedExecutionHandle, ExecutionHandle, FailedNonRetryableExecutionHandle, FailedRetryableExecutionHandle, PendingExecutionHandle}
 import cromwell.backend.impl.jes.RunStatus.TerminalRunStatus
+import cromwell.backend.impl.jes.errors.FailedToDelocalizeFailure
 import cromwell.backend.impl.jes.io._
 import cromwell.backend.impl.jes.statuspolling.{JesRunCreationClient, JesStatusRequestClient}
 import cromwell.backend.standard.{StandardAsyncExecutionActor, StandardAsyncExecutionActorParams, StandardAsyncJob}
 import cromwell.core._
-import cromwell.core.path.{DefaultPathBuilder, Path}
 import cromwell.core.logging.JobLogger
 import cromwell.core.path.{DefaultPathBuilder, Path}
 import cromwell.core.retry.SimpleExponentialBackoff
-import cromwell.filesystems.gcs.GcsPath
 import cromwell.services.keyvalue.KeyValueServiceActor._
 import cromwell.filesystems.gcs.GcsPath
 import org.slf4j.LoggerFactory
@@ -30,7 +27,7 @@ import wdl4s.values._
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.language.postfixOps
-import scala.util.{Success, Try}
+import scala.util.{Failure, Success, Try}
 import scala.collection.JavaConverters._
 
 object JesAsyncBackendJobExecutionActor {
@@ -46,7 +43,8 @@ object JesAsyncBackendJobExecutionActor {
 
   private val ExtraConfigParamName = "__extra_config_gcs_path"
 
-  //RUCHI:: I also like the name maxUnexpectedRetries
+  private def stringifyMap(m: Map[String, String]): String = m map { case(k, v) => s"  $k -> $v"} mkString "\n"
+
   val maxUnexpectedRetries = 2
 
   val GoogleCancelledRpc = 1
@@ -97,7 +95,13 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
 
   private lazy val dockerConfiguration = jesConfiguration.dockerCredentials
 
+  /**
+    * How many preemptions have we already seen?
+    */
   private var preemptionCount: Option[Int] = None
+  /**
+    * How many unexpected retries have we already suffered through?
+    */
   private var unexpectedRetryCount: Option[Int] = None
 
   override lazy val retryable: Boolean = preemptible || unexpectedRetryCount.get < maxUnexpectedRetries
@@ -112,13 +116,13 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
 
   override def preStart(): Unit = {
     if(attempt.equals(1)) {
-      initializeRetryableCounts
+      initializeRetryableCounts()
     }
-    else getRetryCounts
+    else getRetryCounts()
   }
 
   private def initializeRetryableCounts() = {
-    if(maxPreemption > 0) preemptionCount = Some(1)
+    if (maxPreemption > 0) preemptionCount = Some(1)
     else preemptionCount = Some(0)
     unexpectedRetryCount = Some(0)
 
@@ -338,11 +342,19 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
     // Force runtimeAttributes to evaluate so we can fail quickly now if we need to:
     Try(runtimeAttributes) match {
       case Success(_) =>
-
+        val command = instantiatedCommand
         val jesInputs: Set[JesInput] = generateJesInputs(jobDescriptor) ++ monitoringScript + cmdInput
         val jesOutputs: Set[JesFileOutput] = generateJesOutputs(jobDescriptor) ++ monitoringOutput
+        val withMonitoring = monitoringOutput.isDefined
+
+        uploadCommandScript(command, withMonitoring, backendEngineFunctions.findGlobOutputs(call, jobDescriptor))
+        val run: Run = createJesRun(jesParameters, runIdForResumption)
+
+          PendingExecutionHandle(jobDescriptor, StandardAsyncJob(run.runId), Option(run), previousStatus = None)
+      case Failure(e) => FailedNonRetryableExecutionHandle(e)
     }
   }
+
   override def recoverAsync(jobId: StandardAsyncJob)(implicit ec: ExecutionContext): Future[ExecutionHandle] = {
     runWithJes(Option(jobId))
   }
@@ -459,7 +471,7 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
       Try { errorMessage.substring(0, errorMessage.indexOf(':')).toInt } toOption
     }
 
-    val failedStatus: TerminalRunStatus = runStatus match {
+    val failedStatus: UnsuccessfulRunStatus = runStatus match {
       case failedStatus: RunStatus.Failed => failedStatus
       case preemptedStatus: RunStatus.Preempted => preemptedStatus
       case unknown => throw new RuntimeException(s"handleExecutionFailure not called with RunStatus.Failed or RunStatus.Preempted. Instead got $unknown")
@@ -497,8 +509,6 @@ class JesAsyncBackendJobExecutionActor(override val standardParams: StandardAsyn
   private def handlePreemption(errorCode: Int, errorMessage: String, jobReturnCode: Option[Int]): ExecutionHandle = {
     import lenthall.numeric.IntegerUtil._
 
-
-    val errorCode = failed.errorCode
     val taskName = s"${workflowDescriptor.id}:${call.unqualifiedName}"
     val baseMsg = s"Task $taskName was preempted for the ${preemptionCount.get.toOrdinal} time."
 
