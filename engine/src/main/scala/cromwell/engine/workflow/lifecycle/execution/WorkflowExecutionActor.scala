@@ -751,8 +751,6 @@ object WorkflowExecutionActor {
     override val exceptionContext = s"WorkflowExecutionActor"
   }
 
-  //private lazy val DefaultMaxRetriesFallbackValue = 10
-
   def props(workflowDescriptor: EngineWorkflowDescriptor,
             serviceRegistryActor: ActorRef,
             jobStoreActor: ActorRef,

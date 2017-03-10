@@ -17,7 +17,7 @@ import cromwell.engine.workflow.tokens.JobExecutionTokenDispenserActor
 import cromwell.engine.workflow.workflowstore.{InMemoryWorkflowStore, WorkflowStoreActor}
 import cromwell.util.SampleWdl
 import cromwell.util.SampleWdl.{ExpressionsInInputs, GoodbyeWorld, ThreeStep}
-import cromwell.{AlwaysHappyJobStoreActor, AlwaysHappySubWorkflowStoreActor, CromwellTestKitSpec, EmptyCallCacheReadActor}
+import cromwell._
 import org.scalatest.prop.{TableDrivenPropertyChecks, TableFor3}
 import spray.json._
 
@@ -41,7 +41,7 @@ object SingleWorkflowRunnerActorSpec {
 
   implicit class OptionJsValueEnhancer(val jsValue: Option[JsValue]) extends AnyVal {
     def toOffsetDateTime = OffsetDateTime.parse(jsValue.toStringValue)
-    def toStringValue = jsValue.get.asInstanceOf[JsString].value
+    def toStringValue = jsValue.getOrElse(JsString("{}")).asInstanceOf[JsString].value
     def toFields = jsValue.get.asJsObject.fields
   }
 
@@ -57,19 +57,21 @@ abstract class SingleWorkflowRunnerActorSpec extends CromwellTestKitSpec {
   private val jobStore = system.actorOf(AlwaysHappyJobStoreActor.props)
   private val subWorkflowStore = system.actorOf(AlwaysHappySubWorkflowStoreActor.props)
   private val callCacheReadActor = system.actorOf(EmptyCallCacheReadActor.props)
+  private val dockerHashActor = system.actorOf(EmptyDockerHashActor.props)
   private val jobTokenDispenserActor = system.actorOf(JobExecutionTokenDispenserActor.props)
 
 
   def workflowManagerActor(): ActorRef = {
     val params = WorkflowManagerActorParams(ConfigFactory.load(),
-      workflowStore,
-      dummyServiceRegistryActor,
-      dummyLogCopyRouter,
-      jobStore,
-      subWorkflowStore,
-      callCacheReadActor,
-      jobTokenDispenserActor,
-      BackendSingletonCollection(Map.empty),
+      workflowStore = workflowStore,
+      serviceRegistryActor = dummyServiceRegistryActor,
+      workflowLogCopyRouter = dummyLogCopyRouter,
+      jobStoreActor = jobStore,
+      subWorkflowStoreActor = subWorkflowStore,
+      callCacheReadActor = callCacheReadActor,
+      dockerHashActor = dockerHashActor,
+      jobTokenDispenserActor = jobTokenDispenserActor,
+      backendSingletonCollection = BackendSingletonCollection(Map.empty),
       abortJobsOnTerminate = false,
       serverMode = false)
     system.actorOf(Props(new WorkflowManagerActor(params)), "WorkflowManagerActor")
