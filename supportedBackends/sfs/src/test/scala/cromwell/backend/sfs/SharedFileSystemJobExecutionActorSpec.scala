@@ -12,7 +12,6 @@ import cromwell.backend.sfs.TestLocalAsyncJobExecutionActor._
 import cromwell.backend.standard.StandardValidatedRuntimeAttributesBuilder
 import cromwell.core.Tags._
 import cromwell.core._
-import cromwell.core.path.{DefaultPathBuilder, Path}
 import cromwell.core.callcaching.CallCachingEligible
 import cromwell.core.path.{DefaultPathBuilder, Path}
 import cromwell.services.keyvalue.KeyValueServiceActor.{KvJobKey, KvPair, ScopedKey}
