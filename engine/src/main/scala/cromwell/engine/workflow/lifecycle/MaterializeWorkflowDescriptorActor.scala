@@ -355,10 +355,10 @@ class MaterializeWorkflowDescriptorActor(serviceRegistryActor: ActorRef,
       writeMetadatae(importsDir)
       val importsDirFile = better.files.File(importsDir.pathAsString) // For wdl4s better file compatibility
       val importResolvers: Seq[ImportResolver] = if (importLocalFilesystem) {
-          List(WdlNamespace.directoryResolver(importsDirFile), WdlNamespace.fileResolver)
-        } else {
-          List(WdlNamespace.directoryResolver(importsDirFile))
-        }
+        List(WdlNamespace.directoryResolver(importsDirFile), WdlNamespace.fileResolver)
+      } else {
+        List(WdlNamespace.directoryResolver(importsDirFile))
+      }
       val results = WdlNamespaceWithWorkflow.load(w.wdlSource, importResolvers)
       importsDir.delete(swallowIOExceptions = true)
       results match {
